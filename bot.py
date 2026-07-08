@@ -12,15 +12,12 @@ VK_TOKEN = os.getenv("VK_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
 API_VERSION = "5.199"
 
-# Ссылки на CSV-листы
 CSV_PRICES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRRIt0VXVeQzCHNuchxHTzqeMTz67gui7OYOamrMDnq5c7XaJRe_lgZjDoX8hUYlAiVMlrmZtOb0APV/pub?gid=0&single=true&output=csv"
 CSV_JOBS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRRIt0VXVeQzCHNuchxHTzqeMTz67gui7OYOamrMDnq5c7XaJRe_lgZjDoX8hUYlAiVMlrmZtOb0APV/pub?gid=1300710276&single=true&output=csv"
 CSV_POINTS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRRIt0VXVeQzCHNuchxHTzqeMTz67gui7OYOamrMDnq5c7XaJRe_lgZjDoX8hUYlAiVMlrmZtOb0APV/pub?gid=722284172&single=true&output=csv"
 
-# Кто уже писал боту (сбрасывается при перезапуске)
 known_users = set()
 
-# Приветственное и универсальное сообщения
 WELCOME_TEXT = "👋 Здравствуйте! Добро пожаловать!\n\nВыберите, что вас интересует:"
 UNIVERSAL_TEXT = "Выберите, что вас интересует:"
 
@@ -28,7 +25,6 @@ UNIVERSAL_TEXT = "Выберите, что вас интересует:"
 # ============ Работа с гугл-таблицей ============
 
 def load_csv(url):
-    """Читает CSV по ссылке, возвращает список строк (словарей)"""
     r = requests.get(url, timeout=10)
     r.encoding = "utf-8"
     reader = csv.DictReader(io.StringIO(r.text))
@@ -87,7 +83,7 @@ def format_points():
     return "\n\n".join(blocks) if len(blocks) > 1 else "Пунктов приема пока нет."
 
 
-# ============ Клавиатура ============
+# ============ Клавиатуры ============
 
 def main_keyboard():
     keyboard = {
@@ -104,7 +100,18 @@ def main_keyboard():
     return json.dumps(keyboard, ensure_ascii=False)
 
 
-# ============ Отправка сообщений ============
+def back_keyboard():
+    keyboard = {
+        "inline": True,
+        "buttons": [
+            [{"action": {"type": "callback", "label": "⬅️ Назад",
+                         "payload": json.dumps({"cmd": "menu"})}, "color": "secondary"}],
+        ],
+    }
+    return json.dumps(keyboard, ensure_ascii=False)
+
+
+# ============ Отправка / редактирование сообщений ============
 
 def send_message(peer_id, text, keyboard=None):
     params = {
@@ -119,8 +126,21 @@ def send_message(peer_id, text, keyboard=None):
     requests.post("https://api.vk.com/method/messages.send", data=params)
 
 
+def edit_message(peer_id, cmid, text, keyboard=None):
+    """Редактирует уже отправленное сообщение (по conversation_message_id)"""
+    params = {
+        "access_token": VK_TOKEN,
+        "v": API_VERSION,
+        "peer_id": peer_id,
+        "conversation_message_id": cmid,
+        "message": text,
+    }
+    if keyboard:
+        params["keyboard"] = keyboard
+    requests.post("https://api.vk.com/method/messages.edit", data=params)
+
+
 def answer_callback(event_id, user_id, peer_id):
-    """Убирает 'часики' на кнопке (обязательно для callback-кнопок)"""
     params = {
         "access_token": VK_TOKEN,
         "v": API_VERSION,
@@ -165,7 +185,6 @@ def main():
             for event in r.get("updates", []):
                 etype = event.get("type")
 
-                # Обычное сообщение
                 if etype == "message_new":
                     msg = event["object"]["message"]
                     peer_id = msg["peer_id"]
@@ -177,23 +196,25 @@ def main():
                     else:
                         send_message(peer_id, UNIVERSAL_TEXT, main_keyboard())
 
-                # Нажатие callback-кнопки
                 elif etype == "message_event":
                     obj = event["object"]
                     peer_id = obj["peer_id"]
                     user_id = obj["user_id"]
                     event_id = obj["event_id"]
+                    cmid = obj.get("conversation_message_id")
                     payload = obj.get("payload", {})
                     cmd = payload.get("cmd")
 
                     answer_callback(event_id, user_id, peer_id)
 
                     if cmd == "prices":
-                        send_message(peer_id, format_prices())
+                        edit_message(peer_id, cmid, format_prices(), back_keyboard())
                     elif cmd == "points":
-                        send_message(peer_id, format_points())
+                        edit_message(peer_id, cmid, format_points(), back_keyboard())
                     elif cmd == "jobs":
-                        send_message(peer_id, format_jobs())
+                        edit_message(peer_id, cmid, format_jobs(), back_keyboard())
+                    elif cmd == "menu":
+                        edit_message(peer_id, cmid, UNIVERSAL_TEXT, main_keyboard())
 
         except Exception as e:
             print("Ошибка:", e)
