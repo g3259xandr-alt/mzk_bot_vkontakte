@@ -277,8 +277,7 @@ def main():
 
                     elif cmd == "jobs":
                         edit_message(peer_id, cmid, format_jobs(), back_keyboard())
-
-elif cmd == "points":
+                    elif cmd == "points":
                         try:
                             page = payload.get("p", 0)
                             points = get_points_data()
