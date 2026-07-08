@@ -278,10 +278,19 @@ def main():
                     elif cmd == "jobs":
                         edit_message(peer_id, cmid, format_jobs(), back_keyboard())
 
-                    elif cmd == "points":
-                        page = payload.get("p", 0)
-                        edit_message(peer_id, cmid,
-                                     points_title(page), points_keyboard(page))
+elif cmd == "points":
+                        try:
+                            page = payload.get("p", 0)
+                            points = get_points_data()
+                            print(f"[DEBUG] Загружено пунктов: {len(points)}")
+                            if points:
+                                print(f"[DEBUG] Первый пункт: {points[0]}")
+                            kb = points_keyboard(page)
+                            print(f"[DEBUG] Клавиатура: {kb[:300]}")
+                            edit_message(peer_id, cmid, points_title(page), kb)
+                        except Exception as e:
+                            print("[DEBUG] ОШИБКА в points:", repr(e))
+                            send_message(peer_id, f"Ошибка пунктов: {e}", main_keyboard())
 
                     elif cmd == "point":
                         i = payload.get("i")
