@@ -19,12 +19,20 @@ CSV_POINTS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRRIt0VXVeQzCHNuch
 
 # VK возвращает error_code 911 "keyboard contains too much buttons", если в
 # inline-клавиатуре больше 10 кнопок суммарно (независимо от числа строк).
-# До 2 кнопок уходит под навигацию (◀️/▶️) и ещё 1 — под "🏠 В меню",
-# поэтому под сами пункты остаётся MAX_INLINE_BUTTONS - RESERVED_BUTTONS.
+# SAFETY_MARGIN оставляет запас в 1 кнопку ниже реального лимита.
 MAX_INLINE_BUTTONS = 10
-RESERVED_BUTTONS = 3  # "Назад" + "Вперёд" + "В меню" (максимум одновременно)
-POINTS_COLUMNS = 2  # кнопок пунктов в одной строке
-PER_PAGE = ((MAX_INLINE_BUTTONS - RESERVED_BUTTONS) // POINTS_COLUMNS) * POINTS_COLUMNS  # пунктов на странице
+SAFETY_MARGIN = 1
+POINTS_COLUMNS = 2  # кнопок в одной строке списка
+
+# Список районов (верхний уровень): "Назад" + "Вперёд" + "В меню" = 3 кнопки резерва
+RESERVED_TOP = 3
+PER_PAGE = ((MAX_INLINE_BUTTONS - SAFETY_MARGIN - RESERVED_TOP) // POINTS_COLUMNS) * POINTS_COLUMNS
+
+# Список подрайонов / адресов (уровень ниже): + кнопка "⬅️ К списку" = 4 кнопки резерва
+RESERVED_NESTED = 4
+PER_PAGE_NESTED = ((MAX_INLINE_BUTTONS - SAFETY_MARGIN - RESERVED_NESTED) // POINTS_COLUMNS) * POINTS_COLUMNS
+
+OTHER_SUBDISTRICT_LABEL = "Прочие пункты"
 
 known_users = set()
 
@@ -73,7 +81,9 @@ def format_jobs():
 
 
 def get_points_data():
-    """Список всех пунктов (только с адресом/районом), в порядке таблицы"""
+    """Список всех пунктов (только с адресом/районом), в порядке таблицы.
+    Каждому пункту присваивается стабильный "idx" — глобальный индекс,
+    по которому строятся ссылки в кнопках."""
     rows = load_csv(CSV_POINTS)
     points = []
     for row in rows:
@@ -83,6 +93,7 @@ def get_points_data():
         hours = (row.get("Режим работы") or "").strip()
         if address or district:
             points.append({
+                "idx": len(points),
                 "district": district,
                 "subdistrict": subdistrict,
                 "address": address,
@@ -91,15 +102,52 @@ def get_points_data():
     return points
 
 
-def point_label(p):
-    """Короткая подпись для кнопки"""
-    parts = []
-    if p["district"]:
-        parts.append(p["district"])
-    if p["subdistrict"]:
-        parts.append(p["subdistrict"])
-    label = ", ".join(parts) if parts else p["address"]
-    return label[:40] if label else "Пункт"
+def get_districts():
+    """Уникальные районы в порядке первого появления в таблице"""
+    order = []
+    seen = set()
+    for p in get_points_data():
+        d = p["district"] or "Без района"
+        if d not in seen:
+            seen.add(d)
+            order.append(d)
+    return order
+
+
+def points_in_district(district):
+    return [p for p in get_points_data() if (p["district"] or "Без района") == district]
+
+
+def subdistrict_groups(district):
+    """Подрайоны внутри района в порядке появления. Если есть пункты без
+    подрайона, они собираются в отдельную группу с ключом ''."""
+    order = []
+    seen = set()
+    has_empty = False
+    for p in points_in_district(district):
+        s = p["subdistrict"]
+        if s:
+            if s not in seen:
+                seen.add(s)
+                order.append(s)
+        else:
+            has_empty = True
+    if has_empty:
+        order.append("")
+    return order
+
+
+def subdistrict_label(s):
+    return s if s else OTHER_SUBDISTRICT_LABEL
+
+
+def points_in_subdistrict(district, subdistrict):
+    return [p for p in points_in_district(district) if p["subdistrict"] == subdistrict]
+
+
+def truncate_label(s, fallback="Пункт"):
+    s = (s or "").strip()
+    return s[:40] if s else fallback
 
 
 def format_point_detail(p):
@@ -145,21 +193,18 @@ def back_keyboard(cmd="menu"):
     return json.dumps(keyboard, ensure_ascii=False)
 
 
-def points_keyboard(page):
-    """Кнопки пунктов текущей страницы + навигация"""
-    points = get_points_data()
-    total = len(points)
-    start = page * PER_PAGE
-    end = min(start + PER_PAGE, total)
+def _paged_grid(items, page, per_page, label_of, payload_of):
+    """Общий конструктор сетки из POINTS_COLUMNS кнопок в строке для списка items."""
+    total = len(items)
+    start = page * per_page
+    end = min(start + per_page, total)
 
     buttons = []
-    # кнопки пунктов, по POINTS_COLUMNS штук в строке
     row = []
-    for idx in range(start, end):
-        p = points[idx]
+    for i in range(start, end):
         row.append({
-            "action": {"type": "callback", "label": point_label(p),
-                       "payload": json.dumps({"cmd": "point", "i": idx})},
+            "action": {"type": "callback", "label": label_of(items[i]),
+                       "payload": json.dumps(payload_of(i, items[i]))},
             "color": "secondary"
         })
         if len(row) == POINTS_COLUMNS:
@@ -167,39 +212,155 @@ def points_keyboard(page):
             row = []
     if row:
         buttons.append(row)
+    return buttons, total, end
 
-    # строка навигации
+
+def _nav_row(page, end, total, nav_cmd, nav_extra):
     nav = []
     if page > 0:
         nav.append({
             "action": {"type": "callback", "label": "◀️ Назад",
-                       "payload": json.dumps({"cmd": "points", "p": page - 1})},
+                       "payload": json.dumps({**nav_extra, "cmd": nav_cmd, "p": page - 1})},
             "color": "primary"
         })
     if end < total:
         nav.append({
             "action": {"type": "callback", "label": "Вперёд ▶️",
-                       "payload": json.dumps({"cmd": "points", "p": page + 1})},
+                       "payload": json.dumps({**nav_extra, "cmd": nav_cmd, "p": page + 1})},
             "color": "primary"
         })
-    if nav:
-        buttons.append(nav)
+    return [nav] if nav else []
 
-    # кнопка в главное меню
-    buttons.append([{
+
+def _menu_button():
+    return [{
         "action": {"type": "callback", "label": "🏠 В меню",
                    "payload": json.dumps({"cmd": "menu"})},
         "color": "negative"
-    }])
+    }]
 
+
+def _back_button(label, payload):
+    return [{
+        "action": {"type": "callback", "label": label,
+                   "payload": json.dumps(payload)},
+        "color": "primary"
+    }]
+
+
+def districts_keyboard(page):
+    """Верхний уровень: список районов"""
+    districts = get_districts()
+    buttons, total, end = _paged_grid(
+        districts, page, PER_PAGE,
+        label_of=lambda d: truncate_label(d, "Район"),
+        payload_of=lambda i, d: {"cmd": "district", "d": i, "p": 0},
+    )
+    buttons += _nav_row(page, end, total, "points", {})
+    buttons.append(_menu_button())
     return json.dumps({"inline": True, "buttons": buttons}, ensure_ascii=False)
 
 
-def points_title(page):
-    points = get_points_data()
-    total = len(points)
-    total_pages = (total + PER_PAGE - 1) // PER_PAGE
-    return f"📍 Пункты приема (стр. {page + 1}/{total_pages}):\nВыберите пункт:"
+def districts_title(page):
+    total = len(get_districts())
+    total_pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+    return f"📍 Пункты приема (стр. {page + 1}/{total_pages}):\nВыберите район:"
+
+
+def subdistricts_keyboard(d_idx, page):
+    """Средний уровень: подрайоны внутри района (например, Саранск)"""
+    district = get_districts()[d_idx]
+    subs = subdistrict_groups(district)
+    buttons, total, end = _paged_grid(
+        subs, page, PER_PAGE_NESTED,
+        label_of=lambda s: truncate_label(subdistrict_label(s), "Подрайон"),
+        payload_of=lambda i, s: {"cmd": "subdistrict", "d": d_idx, "s": i, "p": 0},
+    )
+    buttons += _nav_row(page, end, total, "district", {"d": d_idx})
+    buttons.append(_back_button("⬅️ К районам", {"cmd": "points", "p": d_idx // PER_PAGE}))
+    buttons.append(_menu_button())
+    return json.dumps({"inline": True, "buttons": buttons}, ensure_ascii=False)
+
+
+def subdistricts_title(d_idx, page):
+    district = get_districts()[d_idx]
+    total = len(subdistrict_groups(district))
+    total_pages = max(1, (total + PER_PAGE_NESTED - 1) // PER_PAGE_NESTED)
+    return f"📍 {district} (стр. {page + 1}/{total_pages}):\nВыберите подрайон:"
+
+
+def address_list_keyboard(points_group, page, nav_cmd, nav_extra, back_label, back_payload):
+    """Нижний уровень: список конкретных адресов (пунктов)"""
+    buttons, total, end = _paged_grid(
+        points_group, page, PER_PAGE_NESTED,
+        label_of=lambda p: truncate_label(p["address"] or p["district"]),
+        payload_of=lambda i, p: {"cmd": "point", "i": p["idx"]},
+    )
+    buttons += _nav_row(page, end, total, nav_cmd, nav_extra)
+    buttons.append(_back_button(back_label, back_payload))
+    buttons.append(_menu_button())
+    return json.dumps({"inline": True, "buttons": buttons}, ensure_ascii=False)
+
+
+def district_addresses_keyboard(d_idx, page):
+    """Список адресов района без деления на подрайоны"""
+    district = get_districts()[d_idx]
+    points_group = points_in_district(district)
+    return address_list_keyboard(
+        points_group, page,
+        nav_cmd="district", nav_extra={"d": d_idx},
+        back_label="⬅️ К районам",
+        back_payload={"cmd": "points", "p": d_idx // PER_PAGE},
+    )
+
+
+def district_addresses_title(d_idx, page):
+    district = get_districts()[d_idx]
+    total = len(points_in_district(district))
+    total_pages = max(1, (total + PER_PAGE_NESTED - 1) // PER_PAGE_NESTED)
+    return f"📍 {district} (стр. {page + 1}/{total_pages}):\nВыберите пункт:"
+
+
+def subdistrict_addresses_keyboard(d_idx, s_idx, page):
+    """Список адресов внутри конкретного подрайона"""
+    district = get_districts()[d_idx]
+    subs = subdistrict_groups(district)
+    subdistrict = subs[s_idx]
+    points_group = points_in_subdistrict(district, subdistrict)
+    return address_list_keyboard(
+        points_group, page,
+        nav_cmd="subdistrict", nav_extra={"d": d_idx, "s": s_idx},
+        back_label="⬅️ К подрайонам",
+        back_payload={"cmd": "district", "d": d_idx, "p": s_idx // PER_PAGE_NESTED},
+    )
+
+
+def subdistrict_addresses_title(d_idx, s_idx, page):
+    district = get_districts()[d_idx]
+    subs = subdistrict_groups(district)
+    subdistrict = subs[s_idx]
+    total = len(points_in_subdistrict(district, subdistrict))
+    total_pages = max(1, (total + PER_PAGE_NESTED - 1) // PER_PAGE_NESTED)
+    return (f"📍 {district} — {subdistrict_label(subdistrict)} (стр. {page + 1}/{total_pages}):"
+            f"\nВыберите пункт:")
+
+
+def point_back_target(p):
+    """Куда вернуться из карточки пункта: к списку адресов района или подрайона"""
+    district = p["district"] or "Без района"
+    d_idx = get_districts().index(district)
+    subs = subdistrict_groups(district)
+    if len(subs) > 1:
+        s_idx = subs.index(p["subdistrict"])
+        group = points_in_subdistrict(district, p["subdistrict"])
+        pos = next(k for k, gp in enumerate(group) if gp["idx"] == p["idx"])
+        page = pos // PER_PAGE_NESTED
+        return {"cmd": "subdistrict", "d": d_idx, "s": s_idx, "p": page}
+    else:
+        group = points_in_district(district)
+        pos = next(k for k, gp in enumerate(group) if gp["idx"] == p["idx"])
+        page = pos // PER_PAGE_NESTED
+        return {"cmd": "district", "d": d_idx, "p": page}
 
 
 # ============ Отправка / редактирование ============
@@ -292,45 +453,56 @@ def main():
 
                     answer_callback(event_id, user_id, peer_id)
 
-                    if cmd == "prices":
-                        edit_message(peer_id, cmid, format_prices(), back_keyboard())
+                    try:
+                        if cmd == "prices":
+                            edit_message(peer_id, cmid, format_prices(), back_keyboard())
 
-                    elif cmd == "jobs":
-                        edit_message(peer_id, cmid, format_jobs(), back_keyboard())
-                    elif cmd == "points":
-                        try:
+                        elif cmd == "jobs":
+                            edit_message(peer_id, cmid, format_jobs(), back_keyboard())
+
+                        elif cmd == "points":
                             page = payload.get("p", 0)
-                            points = get_points_data()
-                            print(f"[DEBUG] Загружено пунктов: {len(points)}")
-                            if points:
-                                print(f"[DEBUG] Первый пункт: {points[0]}")
-                            kb = points_keyboard(page)
-                            print(f"[DEBUG] Клавиатура: {kb[:300]}")
-                            edit_message(peer_id, cmid, points_title(page), kb)
-                        except Exception as e:
-                            print("[DEBUG] ОШИБКА в points:", repr(e))
-                            send_message(peer_id, f"Ошибка пунктов: {e}", main_keyboard())
+                            edit_message(peer_id, cmid, districts_title(page), districts_keyboard(page))
 
-                    elif cmd == "point":
-                        i = payload.get("i")
-                        points = get_points_data()
-                        if 0 <= i < len(points):
-                            # какая страница у этого пункта — чтобы вернуться на неё
-                            page = i // PER_PAGE
-                            kb = {
-                                "inline": True,
-                                "buttons": [[{
-                                    "action": {"type": "callback", "label": "⬅️ К списку",
-                                               "payload": json.dumps({"cmd": "points", "p": page})},
-                                    "color": "primary"
-                                }]]
-                            }
+                        elif cmd == "district":
+                            d_idx = payload.get("d")
+                            page = payload.get("p", 0)
+                            district = get_districts()[d_idx]
+                            if len(subdistrict_groups(district)) > 1:
+                                edit_message(peer_id, cmid,
+                                             subdistricts_title(d_idx, page),
+                                             subdistricts_keyboard(d_idx, page))
+                            else:
+                                edit_message(peer_id, cmid,
+                                             district_addresses_title(d_idx, page),
+                                             district_addresses_keyboard(d_idx, page))
+
+                        elif cmd == "subdistrict":
+                            d_idx = payload.get("d")
+                            s_idx = payload.get("s")
+                            page = payload.get("p", 0)
                             edit_message(peer_id, cmid,
-                                         format_point_detail(points[i]),
-                                         json.dumps(kb, ensure_ascii=False))
+                                         subdistrict_addresses_title(d_idx, s_idx, page),
+                                         subdistrict_addresses_keyboard(d_idx, s_idx, page))
 
-                    elif cmd == "menu":
-                        edit_message(peer_id, cmid, UNIVERSAL_TEXT, main_keyboard())
+                        elif cmd == "point":
+                            i = payload.get("i")
+                            points = get_points_data()
+                            if 0 <= i < len(points):
+                                p = points[i]
+                                kb = {
+                                    "inline": True,
+                                    "buttons": [_back_button("⬅️ К списку", point_back_target(p))]
+                                }
+                                edit_message(peer_id, cmid,
+                                             format_point_detail(p),
+                                             json.dumps(kb, ensure_ascii=False))
+
+                        elif cmd == "menu":
+                            edit_message(peer_id, cmid, UNIVERSAL_TEXT, main_keyboard())
+                    except Exception as e:
+                        print("[VK ERROR] обработка cmd", cmd, ":", repr(e))
+                        send_message(peer_id, f"Ошибка: {e}", main_keyboard())
 
         except Exception as e:
             print("Ошибка:", e)
