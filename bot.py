@@ -18,6 +18,7 @@ CSV_JOBS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRRIt0VXVeQzCHNuchxH
 CSV_POINTS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRRIt0VXVeQzCHNuchxHTzqeMTz67gui7OYOamrMDnq5c7XaJRe_lgZjDoX8hUYlAiVMlrmZtOb0APV/pub?gid=722284172&single=true&output=csv"
 
 JOBS_URL = "https://lom-rm.ru/vakansii/"
+PHONE_NUMBER = "+79271714364"
 
 
 # VK возвращает error_code 911 "keyboard contains too much buttons", если в
@@ -175,6 +176,8 @@ def main_keyboard():
                          "payload": json.dumps({"cmd": "points", "p": 0})}, "color": "secondary"}],
             [{"action": {"type": "callback", "label": "💼 Вакансии",
                          "payload": json.dumps({"cmd": "jobs"})}, "color": "secondary"}],
+            [{"action": {"type": "open_link", "link": f"tel:{PHONE_NUMBER}",
+                         "label": "📞 Позвонить"}}],
         ],
     }
     return json.dumps(keyboard, ensure_ascii=False)
