@@ -3,6 +3,7 @@ import csv
 import io
 import json
 import random
+import time
 import requests
 from dotenv import load_dotenv
 
@@ -34,6 +35,11 @@ PER_PAGE_NESTED = ((MAX_INLINE_BUTTONS - SAFETY_MARGIN - RESERVED_NESTED) // POI
 
 OTHER_SUBDISTRICT_LABEL = "Прочие пункты"
 
+# Обработка одного клика читает таблицу пунктов по несколько раз (районы,
+# подрайоны, адреса), поэтому без кеша каждый клик — это несколько отдельных
+# HTTP-запросов к Google Sheets подряд, и бот кажется "подвисшим".
+CSV_CACHE_TTL = 60  # секунд
+
 known_users = set()
 
 WELCOME_TEXT = "👋 Здравствуйте! Добро пожаловать!\n\nВыберите, что вас интересует:"
@@ -42,11 +48,19 @@ UNIVERSAL_TEXT = "Выберите, что вас интересует:"
 
 # ============ Работа с гугл-таблицей ============
 
+_csv_cache = {}  # url -> (fetched_at, rows)
+
+
 def load_csv(url):
+    cached = _csv_cache.get(url)
+    if cached and time.time() - cached[0] < CSV_CACHE_TTL:
+        return cached[1]
     r = requests.get(url, timeout=10)
     r.encoding = "utf-8"
     reader = csv.DictReader(io.StringIO(r.text))
-    return list(reader)
+    rows = list(reader)
+    _csv_cache[url] = (time.time(), rows)
+    return rows
 
 
 def format_prices():
