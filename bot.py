@@ -17,12 +17,14 @@ CSV_JOBS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRRIt0VXVeQzCHNuchxH
 CSV_POINTS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRRIt0VXVeQzCHNuchxHTzqeMTz67gui7OYOamrMDnq5c7XaJRe_lgZjDoX8hUYlAiVMlrmZtOb0APV/pub?gid=722284172&single=true&output=csv"
 
 
-# VK ограничивает inline-клавиатуру 6 строками (и не более 5 кнопок в строке).
-# Одна строка всегда уходит под "🏠 В меню", ещё одна — под "◀️/▶️" навигацию,
-# поэтому под сами пункты остаётся MAX_INLINE_ROWS - 2 строки.
-MAX_INLINE_ROWS = 6
+# VK возвращает error_code 911 "keyboard contains too much buttons", если в
+# inline-клавиатуре больше 10 кнопок суммарно (независимо от числа строк).
+# До 2 кнопок уходит под навигацию (◀️/▶️) и ещё 1 — под "🏠 В меню",
+# поэтому под сами пункты остаётся MAX_INLINE_BUTTONS - RESERVED_BUTTONS.
+MAX_INLINE_BUTTONS = 10
+RESERVED_BUTTONS = 3  # "Назад" + "Вперёд" + "В меню" (максимум одновременно)
 POINTS_COLUMNS = 2  # кнопок пунктов в одной строке
-PER_PAGE = POINTS_COLUMNS * (MAX_INLINE_ROWS - 2)  # пунктов на странице
+PER_PAGE = ((MAX_INLINE_BUTTONS - RESERVED_BUTTONS) // POINTS_COLUMNS) * POINTS_COLUMNS  # пунктов на странице
 
 known_users = set()
 
