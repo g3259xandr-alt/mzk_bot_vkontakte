@@ -81,9 +81,7 @@ def format_jobs():
 
 
 def get_points_data():
-    """Список всех пунктов (только с адресом/районом), в порядке таблицы.
-    Каждому пункту присваивается стабильный "idx" — глобальный индекс,
-    по которому строятся ссылки в кнопках."""
+    """Список всех пунктов (только с адресом/районом), в порядке таблицы"""
     rows = load_csv(CSV_POINTS)
     points = []
     for row in rows:
@@ -93,7 +91,6 @@ def get_points_data():
         hours = (row.get("Режим работы") or "").strip()
         if address or district:
             points.append({
-                "idx": len(points),
                 "district": district,
                 "subdistrict": subdistrict,
                 "address": address,
@@ -148,21 +145,6 @@ def points_in_subdistrict(district, subdistrict):
 def truncate_label(s, fallback="Пункт"):
     s = (s or "").strip()
     return s[:40] if s else fallback
-
-
-def format_point_detail(p):
-    """Полная инфа по пункту"""
-    title = []
-    if p["district"]:
-        title.append(p["district"])
-    if p["subdistrict"]:
-        title.append(p["subdistrict"])
-    text = "📍 " + (", ".join(title) if title else "Пункт приема") + "\n"
-    if p["address"]:
-        text += f"\nАдрес: {p['address']}"
-    if p["hours"]:
-        text += f"\nРежим работы: {p['hours']}"
-    return text
 
 
 # ============ Клавиатуры ============
@@ -274,7 +256,7 @@ def subdistricts_keyboard(d_idx, page):
     buttons, total, end = _paged_grid(
         subs, page, PER_PAGE_NESTED,
         label_of=lambda s: truncate_label(subdistrict_label(s), "Подрайон"),
-        payload_of=lambda i, s: {"cmd": "subdistrict", "d": d_idx, "s": i, "p": 0},
+        payload_of=lambda i, s: {"cmd": "subdistrict", "d": d_idx, "s": i},
     )
     buttons += _nav_row(page, end, total, "district", {"d": d_idx})
     buttons.append(_back_button("⬅️ К районам", {"cmd": "points", "p": d_idx // PER_PAGE}))
@@ -289,78 +271,37 @@ def subdistricts_title(d_idx, page):
     return f"📍 {district} (стр. {page + 1}/{total_pages}):\nВыберите подрайон:"
 
 
-def address_list_keyboard(points_group, page, nav_cmd, nav_extra, back_label, back_payload):
-    """Нижний уровень: список конкретных адресов (пунктов)"""
-    buttons, total, end = _paged_grid(
-        points_group, page, PER_PAGE_NESTED,
-        label_of=lambda p: truncate_label(p["address"] or p["district"]),
-        payload_of=lambda i, p: {"cmd": "point", "i": p["idx"]},
-    )
-    buttons += _nav_row(page, end, total, nav_cmd, nav_extra)
-    buttons.append(_back_button(back_label, back_payload))
-    buttons.append(_menu_button())
+def simple_back_keyboard(back_label, back_payload):
+    """Клавиатура для конечного списка адресов: только 'Назад' и 'В меню'"""
+    buttons = [_back_button(back_label, back_payload), _menu_button()]
     return json.dumps({"inline": True, "buttons": buttons}, ensure_ascii=False)
 
 
-def district_addresses_keyboard(d_idx, page):
-    """Список адресов района без деления на подрайоны"""
+def format_points_block(header, points_group):
+    """Текстом сразу все адреса с режимом работы — без промежуточных кнопок"""
+    lines = [header]
+    for p in points_group:
+        entry = f"\n🔹 {p['address'] or 'Без адреса'}"
+        if p["hours"]:
+            entry += f"\nРежим работы: {p['hours']}"
+        lines.append(entry)
+    if len(lines) == 1:
+        lines.append("\nПунктов не найдено.")
+    return "\n".join(lines)
+
+
+def district_points_text(d_idx):
     district = get_districts()[d_idx]
-    points_group = points_in_district(district)
-    return address_list_keyboard(
-        points_group, page,
-        nav_cmd="district", nav_extra={"d": d_idx},
-        back_label="⬅️ К районам",
-        back_payload={"cmd": "points", "p": d_idx // PER_PAGE},
+    return format_points_block(f"📍 {district}:", points_in_district(district))
+
+
+def subdistrict_points_text(d_idx, s_idx):
+    district = get_districts()[d_idx]
+    subdistrict = subdistrict_groups(district)[s_idx]
+    return format_points_block(
+        f"📍 {district} — {subdistrict_label(subdistrict)}:",
+        points_in_subdistrict(district, subdistrict),
     )
-
-
-def district_addresses_title(d_idx, page):
-    district = get_districts()[d_idx]
-    total = len(points_in_district(district))
-    total_pages = max(1, (total + PER_PAGE_NESTED - 1) // PER_PAGE_NESTED)
-    return f"📍 {district} (стр. {page + 1}/{total_pages}):\nВыберите пункт:"
-
-
-def subdistrict_addresses_keyboard(d_idx, s_idx, page):
-    """Список адресов внутри конкретного подрайона"""
-    district = get_districts()[d_idx]
-    subs = subdistrict_groups(district)
-    subdistrict = subs[s_idx]
-    points_group = points_in_subdistrict(district, subdistrict)
-    return address_list_keyboard(
-        points_group, page,
-        nav_cmd="subdistrict", nav_extra={"d": d_idx, "s": s_idx},
-        back_label="⬅️ К подрайонам",
-        back_payload={"cmd": "district", "d": d_idx, "p": s_idx // PER_PAGE_NESTED},
-    )
-
-
-def subdistrict_addresses_title(d_idx, s_idx, page):
-    district = get_districts()[d_idx]
-    subs = subdistrict_groups(district)
-    subdistrict = subs[s_idx]
-    total = len(points_in_subdistrict(district, subdistrict))
-    total_pages = max(1, (total + PER_PAGE_NESTED - 1) // PER_PAGE_NESTED)
-    return (f"📍 {district} — {subdistrict_label(subdistrict)} (стр. {page + 1}/{total_pages}):"
-            f"\nВыберите пункт:")
-
-
-def point_back_target(p):
-    """Куда вернуться из карточки пункта: к списку адресов района или подрайона"""
-    district = p["district"] or "Без района"
-    d_idx = get_districts().index(district)
-    subs = subdistrict_groups(district)
-    if len(subs) > 1:
-        s_idx = subs.index(p["subdistrict"])
-        group = points_in_subdistrict(district, p["subdistrict"])
-        pos = next(k for k, gp in enumerate(group) if gp["idx"] == p["idx"])
-        page = pos // PER_PAGE_NESTED
-        return {"cmd": "subdistrict", "d": d_idx, "s": s_idx, "p": page}
-    else:
-        group = points_in_district(district)
-        pos = next(k for k, gp in enumerate(group) if gp["idx"] == p["idx"])
-        page = pos // PER_PAGE_NESTED
-        return {"cmd": "district", "d": d_idx, "p": page}
 
 
 # ============ Отправка / редактирование ============
@@ -473,30 +414,17 @@ def main():
                                              subdistricts_title(d_idx, page),
                                              subdistricts_keyboard(d_idx, page))
                             else:
-                                edit_message(peer_id, cmid,
-                                             district_addresses_title(d_idx, page),
-                                             district_addresses_keyboard(d_idx, page))
+                                kb = simple_back_keyboard(
+                                    "⬅️ К районам", {"cmd": "points", "p": d_idx // PER_PAGE})
+                                edit_message(peer_id, cmid, district_points_text(d_idx), kb)
 
                         elif cmd == "subdistrict":
                             d_idx = payload.get("d")
                             s_idx = payload.get("s")
-                            page = payload.get("p", 0)
-                            edit_message(peer_id, cmid,
-                                         subdistrict_addresses_title(d_idx, s_idx, page),
-                                         subdistrict_addresses_keyboard(d_idx, s_idx, page))
-
-                        elif cmd == "point":
-                            i = payload.get("i")
-                            points = get_points_data()
-                            if 0 <= i < len(points):
-                                p = points[i]
-                                kb = {
-                                    "inline": True,
-                                    "buttons": [_back_button("⬅️ К списку", point_back_target(p))]
-                                }
-                                edit_message(peer_id, cmid,
-                                             format_point_detail(p),
-                                             json.dumps(kb, ensure_ascii=False))
+                            back_page = s_idx // PER_PAGE_NESTED
+                            kb = simple_back_keyboard(
+                                "⬅️ К подрайонам", {"cmd": "district", "d": d_idx, "p": back_page})
+                            edit_message(peer_id, cmid, subdistrict_points_text(d_idx, s_idx), kb)
 
                         elif cmd == "menu":
                             edit_message(peer_id, cmid, UNIVERSAL_TEXT, main_keyboard())
