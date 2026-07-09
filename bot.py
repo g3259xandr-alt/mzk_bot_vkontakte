@@ -17,6 +17,8 @@ CSV_PRICES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRRIt0VXVeQzCHNuch
 CSV_JOBS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRRIt0VXVeQzCHNuchxHTzqeMTz67gui7OYOamrMDnq5c7XaJRe_lgZjDoX8hUYlAiVMlrmZtOb0APV/pub?gid=1300710276&single=true&output=csv"
 CSV_POINTS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRRIt0VXVeQzCHNuchxHTzqeMTz67gui7OYOamrMDnq5c7XaJRe_lgZjDoX8hUYlAiVMlrmZtOb0APV/pub?gid=722284172&single=true&output=csv"
 
+JOBS_URL = "https://lom-rm.ru/vakansii/"
+
 
 # VK возвращает error_code 911 "keyboard contains too much buttons", если в
 # inline-клавиатуре больше 10 кнопок суммарно (независимо от числа строк).
@@ -184,6 +186,18 @@ def back_keyboard(cmd="menu"):
         "buttons": [
             [{"action": {"type": "callback", "label": "⬅️ Назад",
                          "payload": json.dumps({"cmd": cmd})}, "color": "secondary"}],
+        ],
+    }
+    return json.dumps(keyboard, ensure_ascii=False)
+
+
+def jobs_keyboard():
+    keyboard = {
+        "inline": True,
+        "buttons": [
+            [{"action": {"type": "open_link", "link": JOBS_URL, "label": "🔗 Подробнее"}}],
+            [{"action": {"type": "callback", "label": "⬅️ Назад",
+                         "payload": json.dumps({"cmd": "menu"})}, "color": "secondary"}],
         ],
     }
     return json.dumps(keyboard, ensure_ascii=False)
@@ -413,7 +427,7 @@ def main():
                             edit_message(peer_id, cmid, format_prices(), back_keyboard())
 
                         elif cmd == "jobs":
-                            edit_message(peer_id, cmid, format_jobs(), back_keyboard())
+                            edit_message(peer_id, cmid, format_jobs(), jobs_keyboard())
 
                         elif cmd == "points":
                             page = payload.get("p", 0)
