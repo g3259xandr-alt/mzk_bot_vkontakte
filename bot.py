@@ -16,7 +16,13 @@ CSV_PRICES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRRIt0VXVeQzCHNuch
 CSV_JOBS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRRIt0VXVeQzCHNuchxHTzqeMTz67gui7OYOamrMDnq5c7XaJRe_lgZjDoX8hUYlAiVMlrmZtOb0APV/pub?gid=1300710276&single=true&output=csv"
 CSV_POINTS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRRIt0VXVeQzCHNuchxHTzqeMTz67gui7OYOamrMDnq5c7XaJRe_lgZjDoX8hUYlAiVMlrmZtOb0APV/pub?gid=722284172&single=true&output=csv"
 
-PER_PAGE = 8  # пунктов на странице
+
+# VK ограничивает inline-клавиатуру 6 строками (и не более 5 кнопок в строке).
+# Одна строка всегда уходит под "🏠 В меню", ещё одна — под "◀️/▶️" навигацию,
+# поэтому под сами пункты остаётся MAX_INLINE_ROWS - 2 строки.
+MAX_INLINE_ROWS = 6
+POINTS_COLUMNS = 2  # кнопок пунктов в одной строке
+PER_PAGE = POINTS_COLUMNS * (MAX_INLINE_ROWS - 2)  # пунктов на странице
 
 known_users = set()
 
@@ -145,14 +151,20 @@ def points_keyboard(page):
     end = min(start + PER_PAGE, total)
 
     buttons = []
-    # кнопки пунктов (по одной в строке)
+    # кнопки пунктов, по POINTS_COLUMNS штук в строке
+    row = []
     for idx in range(start, end):
         p = points[idx]
-        buttons.append([{
+        row.append({
             "action": {"type": "callback", "label": point_label(p),
                        "payload": json.dumps({"cmd": "point", "i": idx})},
             "color": "secondary"
-        }])
+        })
+        if len(row) == POINTS_COLUMNS:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
 
     # строка навигации
     nav = []
@@ -198,7 +210,10 @@ def send_message(peer_id, text, keyboard=None):
     }
     if keyboard:
         params["keyboard"] = keyboard
-    requests.post("https://api.vk.com/method/messages.send", data=params)
+    resp = requests.post("https://api.vk.com/method/messages.send", data=params).json()
+    if "error" in resp:
+        print("[VK ERROR] messages.send:", resp["error"])
+    return resp
 
 
 def edit_message(peer_id, cmid, text, keyboard=None):
@@ -209,7 +224,10 @@ def edit_message(peer_id, cmid, text, keyboard=None):
     }
     if keyboard:
         params["keyboard"] = keyboard
-    requests.post("https://api.vk.com/method/messages.edit", data=params)
+    resp = requests.post("https://api.vk.com/method/messages.edit", data=params).json()
+    if "error" in resp:
+        print("[VK ERROR] messages.edit:", resp["error"])
+    return resp
 
 
 def answer_callback(event_id, user_id, peer_id):
